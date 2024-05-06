@@ -11,12 +11,12 @@ spec:
     metadata:
       labels:
         app: my-application
-    spec:
-      containers:
+  spec:
+    containers:
       - name: my-application
         image: my-application:latest
         ports:
-        - containerPort: 8080
+          - containerPort: 8080
         livenessProbe:
           httpGet:
             path: /actuator/health
@@ -29,5 +29,6 @@ spec:
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
-      nodeSelector:
-        environment: ${ENVIRONMENT}  # Placeholder, to be replaced by environment-specific configuration
+        nodeSelector:
+          environment: ${ENVIRONMENT}  # Replaced by environment-specific configuration
+
