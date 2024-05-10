@@ -11,24 +11,23 @@ spec:
     metadata:
       labels:
         app: my-application
-  spec:
-    containers:
-      - name: my-application
-        image: my-application:latest
-        ports:
-          - containerPort: 8080
-        livenessProbe:
-          httpGet:
-            path: /actuator/health
-            port: 8080
-          initialDelaySeconds: 10
-          periodSeconds: 5
-        readinessProbe:
-          httpGet:
-            path: /actuator/health
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 5
-        nodeSelector:
-          environment: ${ENVIRONMENT}  # Replaced by environment-specific configuration
-
+    spec:
+  containers:
+    - name: my-application
+      image: my-application:latest
+      ports:
+        - containerPort: 8080
+      livenessProbe:
+        httpGet:
+          path: /actuator/health
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 5
+      readinessProbe:
+        httpGet:
+          path: /actuator/health
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 5
+      nodeSelector:
+        environment: ${ENVIRONMENT}  # Replaced by environment-specific configuration
