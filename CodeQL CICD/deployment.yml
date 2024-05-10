@@ -107,6 +107,12 @@ jobs:
       with:
         target: 'https://your-live-site.com'
 
+    - name: Upload ZAP Scan Report
+      uses: actions/upload-artifact@v2
+      with:
+        name: zap-report
+        path: zapReport.html  # Specify the correct path to your ZAP report file
+
   deployment-to-azure-k8s:
     needs: owasp-zap-scan
     runs-on: uhg-runner
