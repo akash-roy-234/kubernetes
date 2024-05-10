@@ -94,6 +94,7 @@ jobs:
   deployment-to-azure-k8s:
     needs: owasp-zap-scan
     runs-on: uhg-runner
+    environment: production-deployment  # This specifies the environment that requires an approval
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
