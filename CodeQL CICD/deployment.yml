@@ -79,9 +79,25 @@ jobs:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
+    - name: SonarQube Scan
+      uses: uhg-actions/sonarqube-scan-action@master
+      with:
+        projectBaseDir: .
+        args: >
+          -Dsonar.qualitygate.wait=true
+          -Dsonar.buildbreaker.skip=true
+          -Dsonar.projectKey=com.optumrx.m3p:orx-m3p-experience-api
+          -Dsonar.sources=.
+          -Dsonar.java.binaries=target/classes
+          -Dsonar.verbose=true
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
   owasp-zap-scan:
     needs: sonarqube-scan
     runs-on: uhg-runner
+    environment: quality-gate-approval
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
@@ -89,12 +105,12 @@ jobs:
     - name: OWASP ZAP Scan
       uses: zaproxy/action-full-scan@v0.2.0
       with:
-        target: 'https://your-live-site.com' # Replace with your application's URL to scan
+        target: 'https://your-live-site.com'
 
   deployment-to-azure-k8s:
     needs: owasp-zap-scan
     runs-on: uhg-runner
-    environment: production-deployment  # This specifies the environment that requires an approval
+    environment: production-deployment
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
@@ -116,24 +132,23 @@ jobs:
         sudo apt update -qq && sudo apt install -y -qq maven
         mvn -version
         mvn -U clean install -q
-      shell: bash
+
+    - name: Extra Build Task
+      run: echo "Running extra build task..."
+      # Replace the above echo command with your actual build commands
 
     - name: Docker Login to Azure Container Registry
       run: |
         echo "${{ secrets.ACR_PASSWORD }}" | docker login orxpbmm3puscdevacr.azurecr.io --username ${{ secrets.ACR_USERNAME }} --password-stdin
-      shell: bash
 
     - name: Build Docker image
       run: docker build --build-arg --force-rm -t orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }} -f ./deployment/development/Dockerfile .
-      shell: bash
 
     - name: ACR Login
       run: az acr login --name orxpbmm3puscdevacr
-      shell: bash
 
     - name: Push Docker image to Azure Container Registry
       run: docker push orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }}
-      shell: bash
 
     - name: Deploy to AKS
       uses: azure/aks-set-context@v3
