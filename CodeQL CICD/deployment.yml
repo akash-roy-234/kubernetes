@@ -1,4 +1,4 @@
-name: Comprehensive CI/CD Workflow
+name: Parallel Quality Checks and Conditional Deployment
 
 on:
   push:
@@ -8,13 +8,21 @@ on:
   workflow_dispatch:
 
 jobs:
-  codeql-analysis:
-    runs-on: uhg-runner
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.date.outputs.datetime }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      
+      - name: Get current date
+        id: date
+        run: echo "::set-output name=datetime::$(date +%Y%m%d%H%M%S)"
 
+  codeql-analysis:
+    needs: setup
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
@@ -28,22 +36,16 @@ jobs:
       uses: github/codeql-action/init@v2
       with:
         languages: [ 'java' ]
-        queries: security-extended,security-and-quality
-
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@v2
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v2
 
   sonarqube-scan:
-    needs: codeql-analysis
-    runs-on: uhg-runner
+    needs: setup
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
 
     - name: Set up JDK 17
       uses: actions/setup-java@v3
@@ -52,71 +54,25 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    - name: Setup Maven
-      uses: uhg-actions/setup-maven@v4.4
+    - name: Run SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@master
       with:
-        maven-version: 3.6.0
-
-    - name: Cache Maven
-      uses: actions/cache@v3
-      with:
-        path: /home/runner/.m2/repository
-        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-        restore-keys: |
-          ${{ runner.os }}-maven-
-
-    - name: Build, run JUnit tests, and Sonar Analyze
-      env:
-        GITHUB_TOKEN: ${{ secrets.GHEC_TOKEN }}
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      run: mvn -B -e clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectBaseDir=src -Dsonar.buildbreaker.skip=true -Dmaven.repo.local=/home/runner/.m2/repository
-
-    - name: SonarQube Quality Gate check
-      uses: uhg-actions/sonarqube-quality-gate-action@master
-      timeout-minutes: 5
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
-    - name: SonarQube Scan
-      uses: uhg-actions/sonarqube-scan-action@master
-      with:
-        projectBaseDir: .
         args: >
           -Dsonar.qualitygate.wait=true
-          -Dsonar.buildbreaker.skip=true
           -Dsonar.projectKey=com.optumrx.m3p:orx-m3p-experience-api
-          -Dsonar.sources=.
-          -Dsonar.java.binaries=target/classes
+          -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
+          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
           -Dsonar.verbose=true
+          -Dsonar.java.binaries=target/classes
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-  owasp-zap-scan:
-    needs: sonarqube-scan
-    runs-on: uhg-runner
-    environment: quality-gate-approval
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+    deployment-to-azure-k8s:
+      needs: [codeql-analysis, sonarqube-scan]
+      runs-on: ubuntu-latest
+      environment: production-deployment
 
-    - name: OWASP ZAP Scan
-      uses: zaproxy/action-full-scan@v0.2.0
-      with:
-        target: 'https://your-live-site.com'
-
-    - name: Upload ZAP Scan Report
-      uses: actions/upload-artifact@v2
-      with:
-        name: zap-report
-        path: zapReport.html  # Specify the correct path to your ZAP report file
-
-  deployment-to-azure-k8s:
-    needs: owasp-zap-scan
-    runs-on: uhg-runner
-    environment: production-deployment
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
@@ -125,6 +81,31 @@ jobs:
       uses: Azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Run az commands
+      run: |
+        az account show
+      shell: bash
+
+    - name: Replace variables in the properties file
+      run: |
+        FILES=${{ github.workspace }}/src/main/resources/application*
+        for file in $FILES; do
+          PLACEHOLDERS=$(grep -oE '__(\w+(-\w+)*)__' $file | sort -u) || continue
+          echo "Updating this file: $file"
+          for placeholder in $PLACEHOLDERS; do
+            SECRET_NAME=${placeholder//__}
+            SECRET_VALUE=$(az keyvault secret show --name $SECRET_NAME --vault-name orx-pbm-m3p-dev-us-c-kv --query value) || continue
+            if [ $? -eq 0 ]; then
+              sed -i "s|${placeholder}|${SECRET_VALUE//\"}|g" "$file"
+              echo "Replaced ${placeholder} with secret value"
+            else
+              echo "Warning: Secret $SECRET_NAME not found in key vault. Placeholder not replaced."
+            fi
+          done
+          cat $file
+        done
+      shell: bash
 
     - name: Set up JDK Version
       uses: actions/setup-java@v2
@@ -138,10 +119,6 @@ jobs:
         sudo apt update -qq && sudo apt install -y -qq maven
         mvn -version
         mvn -U clean install -q
-
-    - name: Extra Build Task
-      run: echo "Running extra build task..."
-      # Replace the above echo command with your actual build commands
 
     - name: Docker Login to Azure Container Registry
       run: |
@@ -167,8 +144,5 @@ jobs:
     - name: Deploy application
       uses: Azure/k8s-deploy@v4
       with:
-        action: deploy
         manifests: ${{ github.workspace }}/deployment/development/deployment.yml
         namespace: 'm3p-dev'
-        images: |
-          orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }}
