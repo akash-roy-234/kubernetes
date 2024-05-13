@@ -73,7 +73,7 @@ jobs:
       runs-on: ubuntu-latest
       environment: production-deployment
 
-    steps:
+  steps:
     - name: Checkout code
       uses: actions/checkout@v2
 
