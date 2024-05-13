@@ -70,8 +70,12 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GHEC_TOKEN }}
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      run: mvn -B -e verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -DskipTests -Dsonar.projectBaseDir=src -Dsonar.buildbreaker.skip=true -Dmaven.repo.local=/home/runner/.m2/repository
-
+      run: |
+        mvn -B clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+            -Dsonar.projectKey=com.optumrx.m3p:orx-m3p-experience-api \
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            
     - name: SonarQube Scan
       uses: uhg-actions/sonarqube-scan-action@master
       with:
