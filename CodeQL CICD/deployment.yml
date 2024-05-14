@@ -1,173 +1,33 @@
-name: Quality check and approval gate
+name: Deployment to Azure Kubernetes
 
 on:
   push:
-    branches: [ "develop" ]
-  pull_request:
-    branches: [ "develop" ]
-  workflow_dispatch:
+    branches:
+      - develop
 
 jobs:
-  codeql-analysis:
-    runs-on: self-hosted
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
+    deploy:
+      runs-on: self-hosted
+      steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-    - uses: actions/setup-java@v3
-      with:
-        distribution: 'temurin'
-        java-version: '21'
+      - name: Log into Azure using GitHub secret AZURE_CREDENTIALS
+        uses: Azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v2
-      with:
-        languages: 'java'
-        queries: security-extended,security-and-quality
+      - name: Build Docker image
+        run: |
+          docker build -t orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }} -f ./deployment/development/Dockerfile .
+          echo "${{ secrets.ACR_PASSWORD }}" | docker login orxpbmm3puscdevacr.azurecr.io --username ${{ secrets.ACR_USERNAME }} --password-stdin
+          docker push orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }}
 
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@v2
-
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2
-
-  sonar-scan:
-    runs-on: self-hosted
-    steps:
-    - name: Cleanup
-      run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
-
-    - name: Checkout code
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
-
-    - name: Set up JDK 21
-      uses: actions/setup-java@v3
-      with:
-        java-version: '21'
-        distribution: "temurin"
-
-    - name: Setup Maven
-      uses: uhg-actions/setup-maven@v4.4
-      with:
-        maven-version: 3.6.0
-
-    - name: Cache Maven
-      uses: actions/cache@v3
-      with:
-        path: /home/runner/.m2/repository
-        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-        restore-keys: ${{ runner.os }}-maven-
-
-    - name: Build and Sonar Analyze and run JUnit
-      env:
-        GITHUB_TOKEN: ${{ secrets.GHEC_TOKEN }}
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      run: |
-        mvn -B clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
-            -Dsonar.projectKey=com.optumrx.m3p:orx-m3p-experience-api \
-            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-
-    - name: SonarQube Scan
-      uses: uhg-actions/sonarqube-scan-action@master
-      with:
-        projectBaseDir: .
-        args: >
-          -Dsonar.qualitygate.wait=true
-          -Dsonar.buildbreaker.skip=true
-          -Dsonar.projectKey=com.optumrx.m3p:orx-m3p-experience-api
-          -Dsonar.sources=.
-          -Dsonar.java.binaries=target/classes
-          -Dsonar.verbose=true
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
-    - name: SonarQube Quality Gate check
-      uses: uhg-actions/sonarqube-quality-gate-action@master
-      timeout-minutes: 5
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
-  deployment-to-azure-k8s:
-    needs: [codeql-analysis, sonar-scan]
-    runs-on: self-hosted
-    environment: Development
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-
-    - name: Log into Azure using GitHub secret AZURE_CREDENTIALS
-      uses: Azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-    - name: 'Run az commands'
-      run: az account show
-      shell: bash
-
-    - name: Replace variables in the properties file
-      run: |
-        FILES=${{ github.workspace }}/src/main/resources/application*
-        for file in $FILES; do
-          PLACEHOLDERS=$(grep -oE '__(\w+(-\w+)*)__' $file | sort -u) || continue
-          for placeholder in $PLACEHOLDERS; do
-            SECRET_NAME=${placeholder//__}
-            SECRET_VALUE=$(az keyvault secret show --name $SECRET_NAME --vault-name orx-pbm-m3p-dev-us-c-kv --query value) || continue
-            if [ $? -eq 0 ]; then
-              sed -i "s|${placeholder}|${SECRET_VALUE//\"}|g" "$file"
-            else
-              echo "Warning: Secret $SECRET_NAME not found in key vault. Placeholder not replaced."
-            fi
-          done
-        done
-      shell: bash
-
-    - name: Set up JDK Version
-      uses: actions/setup-java@v2
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-        cache: maven
-
-    - name: Maven Clean Install
-      run: sudo apt update -qq && sudo apt install -y -qq maven && mvn -U clean install -q
-      shell: bash
-
-    - name: Docker Login to Azure Container Registry
-      run: echo "${{ secrets.ACR_PASSWORD }}" | docker login orxpbmm3puscdevacr.azurecr.io --username ${{ secrets.ACR_USERNAME }} --password-stdin
-      shell: bash
-
-    - name: Build Docker image
-      run: docker build --build-arg --force-rm -t orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }} -f ./deployment/development/Dockerfile .
-      shell: bash
-
-    - name: Push Docker image to Azure Container Registry
-      run: docker push orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }}
-      shell: bash
-
-    - name: Deploy to AKS
-      uses: azure/aks-set-context@v3
-      with:
-        resource-group: 'orx-pbm-m3p-dev-us-c-rg'
-        cluster-name: 'orx-pbm-m3p-dev-us-c-api-aks'
-        admin: 'false'
-        use-kubelogin: 'true'
-
-    - name: Deploy application
-      uses: Azure/k8s-deploy@v4
-      with:
-        action: deploy
-        manifests: ${{ github.workspace }}/deployment/development/deployment.yml
-        namespace: 'm3p-dev'
-        images: orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }}
-
+      - name: Deploy to Kubernetes
+        run: kubectl apply -f ./deployment/development/deployment.yml
+        env:
+          KUBECONFIG: ${{ secrets.KUBECONFIG }}
