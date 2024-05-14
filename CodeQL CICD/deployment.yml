@@ -13,25 +13,50 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
 
+    - name: Log into Azure using GitHub secret AZURE_CREDENTIALS
+      uses: Azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Run az commands
+      run: |
+        az account show
+      shell: bash
+
+    - name: Replace variables in the properties file
+      run: |
+        FILES=${{ github.workspace }}/src/main/resources/application*
+        for file in $FILES; do
+          PLACEHOLDERS=$(grep -oE '__(\w+(-\w+)*)__' $file | sort -u) || continue
+          for placeholder in $PLACEHOLDERS; do
+            SECRET_NAME=${placeholder//__}
+            SECRET_VALUE=$(az keyvault secret show --name $SECRET_NAME --vault-name orx-pbm-m3p-dev-us-c-kv --query value) || continue
+            if [ $? -eq 0 ]; then
+              sed -i "s|${placeholder}|${SECRET_VALUE//\"}|g" "$file"
+              echo "Replaced ${placeholder} with secret value"
+            else
+              echo "Warning: Secret $SECRET_NAME not found in key vault. Placeholder not replaced."
+            fi
+          done
+        done
+      shell: bash
+
     - name: Set up JDK 17
       uses: actions/setup-java@v2
       with:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Maven Package
-      run: |
-        sudo apt update -qq && sudo apt install -y -qq maven
-        mvn -U clean package -DskipTests
-
     - name: Build Docker image
       run: |
-        docker build -t orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }} .
+        docker build -t orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }} -f Dockerfile .
+        docker tag orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }} orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:latest
 
     - name: Push Docker image to ACR
       run: |
         echo "${{ secrets.ACR_PASSWORD }}" | docker login orxpbmm3puscdevacr.azurecr.io --username ${{ secrets.ACR_USERNAME }} --password-stdin
         docker push orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:${{ github.run_number }}
+        docker push orxpbmm3puscdevacr.azurecr.io/orx-m3p-experience-api:latest
 
     - name: Twistlock Scan
       uses: twistlock/scan-action@v1
@@ -41,7 +66,6 @@ jobs:
         fail-build: true
 
     - name: Deploy to Test Environment
-      if: success()
-      run: kubectl apply -f deployment/development/deployment.yml
-      env:
-        KUBECONFIG: ${{ secrets.KUBECONFIG }}
+      if: success()  # Ensures deployment only occurs if Twistlock scan passes
+      run: |
+        kubectl apply -f deployment/development/deployment.yml
