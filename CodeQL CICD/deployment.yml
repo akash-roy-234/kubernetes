@@ -1,4 +1,4 @@
-name: Deployment to Azure k8s 
+name: Deployment to Azure k8s and test
 on:
   workflow_dispatch:
   push:
